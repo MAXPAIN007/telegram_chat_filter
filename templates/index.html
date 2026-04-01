@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>{{ tr("app_title") }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body
+  data-reset-done="{{ 1 if state_reset_done else 0 }}"
+  data-reset-success="{{ tr('reset_success') }}"
+  data-files-selected-template="{{ tr('files_selected_template') }}"
+  data-no-files-selected="{{ tr('no_files_selected') }}"
+  data-send-success-template="{{ tr('send_success_template') }}"
+  data-send-error-fallback="{{ tr('send_error_fallback') }}"
+>
+  <div id="toast-container" class="toast-container"></div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <h3 id="modal-title">{{ tr("reset_modal_title") }}</h3>
+      <p id="modal-text">{{ tr("reset_modal_text") }}</p>
+      <div class="modal-actions">
+        <button type="button" id="modal-cancel" class="btn-secondary">{{ tr("cancel") }}</button>
+        <button type="button" id="modal-confirm" class="btn-primary">{{ tr("confirm") }}</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="container">
+    <header class="hero">
+      <div>
+        <div class="hero-topline">
+          <h1>{{ tr("hero_title") }}</h1>
+          <span class="hero-badge">{{ tr("local_only") }}</span>
+        </div>
+        <p class="intro">{{ tr("intro") }}</p>
+      </div>
+
+      <form method="get" class="lang-switcher">
+        <label for="lang">{{ tr("language") }}</label>
+        <select id="lang" name="lang" onchange="this.form.submit()">
+          <option value="ru" {% if lang == "ru" %}selected{% endif %}>RU</option>
+          <option value="en" {% if lang == "en" %}selected{% endif %}>EN</option>
+        </select>
+      </form>
+    </header>
+
+    {% if error %}
+      <div class="alert alert-error">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    <section class="card">
+      <form method="post" enctype="multipart/form-data" class="form-grid">
+        <input type="hidden" name="lang" value="{{ lang }}">
+
+        <div class="form-group full">
+          <label for="files">{{ tr("raw_telegram_export") }}</label>
+
+          <div class="file-picker">
+            <input id="files" name="files" type="file" accept=".json" multiple required class="file-input-hidden">
+            <label for="files" class="file-btn">{{ tr("choose_files") }}</label>
+            <span id="file-selection-text" class="file-selection-text">{{ tr("no_files_selected") }}</span>
+          </div>
+
+          <small>{{ tr("raw_export_help") }}</small>
+        </div>
+
+        <div class="form-group">
+          <label for="filter_mode">{{ tr("filter_mode") }}</label>
+          <select id="filter_mode" name="filter_mode">
+            <option value="include" {% if form_values.filter_mode == "include" %}selected{% endif %}>
+              {{ tr("mode_include") }}
+            </option>
+            <option value="exclude" {% if form_values.filter_mode == "exclude" %}selected{% endif %}>
+              {{ tr("mode_exclude") }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group full">
+          <label for="keywords">{{ tr("keywords") }}</label>
+          <textarea
+            id="keywords"
+            name="keywords"
+            rows="4"
+            placeholder="client, клиент"
+          >{{ form_values.keywords }}</textarea>
+          <small>{{ tr("keywords_help") }}</small>
+        </div>
+
+        <div class="form-group full">
+          <button type="submit" class="btn-primary">{{ tr("run_processing") }}</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card compact-card">
+      <div class="section-header">
+        <h2>{{ tr("current_delta_state") }}</h2>
+
+        <form method="post" action="{{ url_for('reset_state') }}" class="reset-form">
+          <input type="hidden" name="lang" value="{{ lang }}">
+          <button type="button" id="open-reset-modal" class="btn-secondary">
+            {{ tr("reset_delta_history") }}
+          </button>
+        </form>
+      </div>
+
+      <div class="state-box">
+        {% if state_info.exists %}
+          <div><strong>{{ tr("previous_total_found") }}:</strong> {{ tr("found") }}</div>
+          <div><strong>{{ tr("run_id") }}:</strong> {{ state_info.run_id or "—" }}</div>
+          <div><strong>{{ tr("saved_at") }}:</strong> {{ state_info.saved_at or "—" }}</div>
+          <div><strong>{{ tr("chats") }}:</strong> {{ state_info.total_chats }}</div>
+        {% else %}
+          <div><strong>{{ tr("previous_total_found") }}:</strong> {{ tr("not_found") }}</div>
+          <div>{{ tr("next_run_first_delta") }}</div>
+        {% endif %}
+      </div>
+
+      <div class="agent-box">
+        <div><strong>{{ tr("agent_sending") }}:</strong> {{ tr("enabled") if agent_info.configured else tr("disabled") }}</div>
+        <div><strong>{{ tr("max_file_size") }}:</strong> {{ agent_info.max_file_size_mb }} MB</div>
+        <div><strong>{{ tr("auth_header") }}:</strong> {{ tr("enabled") if agent_info.auth_enabled else tr("disabled") }}</div>
+      </div>
+    </section>
+
+    {% if success %}
+      <section class="card">
+        <h2>{{ tr("result") }}</h2>
+
+        {% if summary %}
+          <div class="metrics-grid">
+            <div class="metric-card"><span class="metric-label">{{ tr("input_files") }}</span><span class="metric-value">{{ summary.total_input_files }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("processed") }}</span><span class="metric-value">{{ summary.successfully_processed_files }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("failed") }}</span><span class="metric-value">{{ summary.failed_files }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("input_chats") }}</span><span class="metric-value">{{ summary.total_input_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("kept_after_filter") }}</span><span class="metric-value">{{ summary.total_kept_after_filter }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("excluded_after_filter") }}</span><span class="metric-value">{{ summary.total_excluded_after_filter }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("final_after_cleaning") }}</span><span class="metric-value">{{ summary.total_final_chats_after_cleaning }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("total_chats") }}</span><span class="metric-value">{{ summary.total_chats_in_total_output }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("run_id") }}</span><span class="metric-value">{{ run_id }}</span></div>
+          </div>
+        {% endif %}
+
+        {% if delta_summary %}
+          <h3>{{ tr("delta_summary") }}</h3>
+          <div class="metrics-grid">
+            <div class="metric-card"><span class="metric-label">{{ tr("previous_total_chats") }}</span><span class="metric-value">{{ delta_summary.previous_total_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("current_total_chats") }}</span><span class="metric-value">{{ delta_summary.current_total_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("delta_chats") }}</span><span class="metric-value">{{ delta_summary.delta_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("delta_full_chats") }}</span><span class="metric-value">{{ delta_summary.delta_full_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("new_chats") }}</span><span class="metric-value">{{ delta_summary.new_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("updated_existing_chats") }}</span><span class="metric-value">{{ delta_summary.updated_existing_chats }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("new_messages_in_delta") }}</span><span class="metric-value">{{ delta_summary.new_messages }}</span></div>
+            <div class="metric-card"><span class="metric-label">{{ tr("first_run") }}</span><span class="metric-value">{{ tr("yes") if delta_summary.first_run_without_previous_total else tr("no") }}</span></div>
+          </div>
+        {% endif %}
+
+        <h3>{{ tr("output_files") }}</h3>
+        <div class="output-guide">
+          <div class="guide-card">
+            <h4>total_filtered.json</h4>
+            <p>{{ tr("total_filtered_desc") }}</p>
+          </div>
+          <div class="guide-card">
+            <h4>delta_updates.json</h4>
+            <p>{{ tr("delta_updates_desc") }}</p>
+          </div>
+          <div class="guide-card">
+            <h4>delta_full_chats.json</h4>
+            <p>{{ tr("delta_full_desc") }}</p>
+          </div>
+        </div>
+
+        <div class="main-files">
+          {% if total_download %}
+            <div class="main-file-card">
+              <h4>{{ total_download.filename }}</h4>
+              <div class="card-actions">
+                <a href="{{ total_download.url }}" class="link-main">{{ tr("download") }}</a>
+                <button
+                  type="button"
+                  class="btn-agent send-agent-btn"
+                  data-run-id="{{ run_id }}"
+                  data-filename="{{ total_download.filename }}"
+                  data-lang="{{ lang }}"
+                  {% if not agent_info.configured %}disabled{% endif %}
+                >
+                  {{ tr("send_to_agent") }}
+                </button>
+              </div>
+            </div>
+          {% endif %}
+
+          {% if delta_download %}
+            <div class="main-file-card">
+              <h4>{{ delta_download.filename }}</h4>
+              <div class="card-actions">
+                <a href="{{ delta_download.url }}" class="link-main">{{ tr("download") }}</a>
+                <button
+                  type="button"
+                  class="btn-agent send-agent-btn"
+                  data-run-id="{{ run_id }}"
+                  data-filename="{{ delta_download.filename }}"
+                  data-lang="{{ lang }}"
+                  {% if not agent_info.configured %}disabled{% endif %}
+                >
+                  {{ tr("send_to_agent") }}
+                </button>
+              </div>
+            </div>
+          {% endif %}
+
+          {% if delta_full_download %}
+            <div class="main-file-card">
+              <h4>{{ delta_full_download.filename }}</h4>
+              <div class="card-actions">
+                <a href="{{ delta_full_download.url }}" class="link-main">{{ tr("download") }}</a>
+                <button
+                  type="button"
+                  class="btn-agent send-agent-btn"
+                  data-run-id="{{ run_id }}"
+                  data-filename="{{ delta_full_download.filename }}"
+                  data-lang="{{ lang }}"
+                  {% if not agent_info.configured %}disabled{% endif %}
+                >
+                  {{ tr("send_to_agent") }}
+                </button>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+
+        <h3>{{ tr("files_by_source") }}</h3>
+        <ul class="download-list">
+          {% for item in downloads %}
+            <li class="source-card">
+              <div class="download-title">{{ item.source_file }}</div>
+
+              <div class="file-stats-grid">
+                <div class="mini-metric"><span>{{ tr("input_chats") }}</span><strong>{{ item.stats.total_chats }}</strong></div>
+                <div class="mini-metric"><span>{{ tr("kept_after_filter") }}</span><strong>{{ item.stats.kept_after_filter }}</strong></div>
+                <div class="mini-metric"><span>{{ tr("excluded_after_filter") }}</span><strong>{{ item.stats.excluded_after_filter }}</strong></div>
+                <div class="mini-metric"><span>{{ tr("final_after_cleaning") }}</span><strong>{{ item.stats.final_chats_in_output }}</strong></div>
+              </div>
+
+              <div class="download-links">
+                <a href="{{ item.output_download_url }}">{{ tr("filtered_json") }}</a>
+                <a href="{{ item.report_download_url }}">{{ tr("report_json") }}</a>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+
+        {% if report_download %}
+          <h3>{{ tr("processing_report") }}</h3>
+          <p>
+            <a href="{{ report_download.url }}" class="link-main">
+              {{ tr("download") }} {{ report_download.filename }}
+            </a>
+          </p>
+        {% endif %}
+      </section>
+    {% endif %}
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
