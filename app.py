@@ -22,21 +22,26 @@ from parser_core import (
 )
 from delta_core import (
     merge_filtered_results,
-    load_json_if_exists,
     compute_delta,
+)
+from advanced_core import (
+    normalize_advanced_config,
+    build_advanced_profile_id,
+    apply_advanced_filters,
+)
+from profile_state import (
+    get_basic_profile_id,
+    get_profile_paths,
+    load_previous_total_for_profile,
+    load_previous_meta_for_profile,
+    save_previous_total_for_profile,
+    reset_profile_state,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOADS_DIR = BASE_DIR / "uploads"
-OUTPUT_DIR = BASE_DIR / "output"
-STATE_DIR = BASE_DIR / "state"
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-STATE_DIR.mkdir(parents=True, exist_ok=True)
-
-PREVIOUS_TOTAL_PATH = STATE_DIR / "previous_total_filtered.json"
-PREVIOUS_TOTAL_META_PATH = STATE_DIR / "previous_total_meta.json"
 
 app = Flask(__name__)
 
@@ -107,6 +112,7 @@ TRANSLATIONS = {
         "processing_report": "Общий отчёт",
         "error_invalid_filter_mode": 'filter_mode должен быть "include" или "exclude"',
         "error_no_files": "Загрузи хотя бы один JSON-файл.",
+        "error_invalid_processing_mode": 'processing_mode должен быть "basic" или "advanced"',
         "agent_not_configured": "Webhook агента не настроен. Добавьте AGENT_WEBHOOK_URL в .env",
         "file_not_found": "Файл не найден: {filename}",
         "file_too_large": 'Файл "{filename}" слишком большой ({size_mb:.2f} MB). Текущий лимит: {limit_mb:.2f} MB.',
@@ -119,6 +125,10 @@ TRANSLATIONS = {
         "confirm": "Подтвердить",
         "close": "Закрыть",
         "language": "Язык",
+        "profile_id": "Профиль",
+        "processing_mode": "Режим обработки",
+        "basic_mode": "Basic",
+        "advanced_mode": "Advanced",
     },
     "en": {
         "app_title": "Telegram Chat Filter",
@@ -183,6 +193,7 @@ TRANSLATIONS = {
         "processing_report": "Processing report",
         "error_invalid_filter_mode": 'filter_mode must be "include" or "exclude"',
         "error_no_files": "Upload at least one JSON file.",
+        "error_invalid_processing_mode": 'processing_mode must be "basic" or "advanced"',
         "agent_not_configured": "Agent webhook is not configured. Add AGENT_WEBHOOK_URL to .env",
         "file_not_found": "File not found: {filename}",
         "file_too_large": 'File "{filename}" is too large ({size_mb:.2f} MB). Current limit: {limit_mb:.2f} MB.',
@@ -195,6 +206,10 @@ TRANSLATIONS = {
         "confirm": "Confirm",
         "close": "Close",
         "language": "Language",
+        "profile_id": "Profile",
+        "processing_mode": "Processing mode",
+        "basic_mode": "Basic",
+        "advanced_mode": "Advanced",
     },
 }
 
@@ -255,36 +270,79 @@ def build_safe_stem(filename: str, index: int) -> str:
     return safe_stem or f"file_{index}"
 
 
-def get_previous_state_info():
-    if not PREVIOUS_TOTAL_PATH.exists():
+def parse_advanced_filters_from_form(form) -> list[dict]:
+    scopes = form.getlist("adv_scope[]")
+    fields = form.getlist("adv_field[]")
+    operators = form.getlist("adv_operator[]")
+    values = form.getlist("adv_value[]")
+    modes = form.getlist("adv_mode[]")
+
+    max_len = max(
+        len(scopes),
+        len(fields),
+        len(operators),
+        len(values),
+        len(modes),
+        0,
+    )
+
+    filters = []
+
+    for i in range(max_len):
+        rule = {
+            "scope": scopes[i] if i < len(scopes) else "",
+            "field": fields[i] if i < len(fields) else "",
+            "operator": operators[i] if i < len(operators) else "",
+            "value": values[i] if i < len(values) else "",
+            "mode": modes[i] if i < len(modes) else "include",
+        }
+
+        if not any(str(v).strip() for v in rule.values()):
+            continue
+
+        filters.append(rule)
+
+    return filters
+
+
+def build_advanced_config_from_form(form) -> dict:
+    return {
+        "match_mode": form.get("adv_match_mode", "all"),
+        "output_mode": form.get("adv_output_mode", "full_chats"),
+        "date_from": form.get("adv_date_from", ""),
+        "date_to": form.get("adv_date_to", ""),
+        "filters": parse_advanced_filters_from_form(form),
+    }
+
+
+def get_state_info_for_profile(mode: str, profile_id: str | None = None):
+    meta = load_previous_meta_for_profile(mode, profile_id)
+    previous_total = load_previous_total_for_profile(mode, profile_id)
+
+    if previous_total is None:
         return {
             "exists": False,
             "run_id": None,
             "saved_at": None,
             "total_chats": 0,
+            "profile_id": profile_id if profile_id else get_basic_profile_id(),
+            "mode": mode,
         }
 
-    meta = load_json_if_exists(PREVIOUS_TOTAL_META_PATH) or {}
-    total_chats = meta.get("total_chats")
-
-    if total_chats is None:
-        previous_total = load_json_if_exists(PREVIOUS_TOTAL_PATH) or {"chats": []}
+    total_chats = 0
+    if meta and meta.get("total_chats") is not None:
+        total_chats = meta["total_chats"]
+    else:
         total_chats = len(previous_total.get("chats", []))
 
     return {
         "exists": True,
-        "run_id": meta.get("run_id"),
-        "saved_at": meta.get("saved_at"),
+        "run_id": meta.get("run_id") if meta else None,
+        "saved_at": meta.get("saved_at") if meta else None,
         "total_chats": total_chats,
+        "profile_id": meta.get("profile_id") if meta else (profile_id if profile_id else get_basic_profile_id()),
+        "mode": mode,
     }
-
-
-def save_previous_state_meta(run_id: str, total_chats: int):
-    save_json_file(PREVIOUS_TOTAL_META_PATH, {
-        "run_id": run_id,
-        "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "total_chats": total_chats,
-    })
 
 
 def get_agent_info():
@@ -299,11 +357,13 @@ def get_file_size_mb(path: Path) -> float:
     return path.stat().st_size / (1024 * 1024)
 
 
-def send_output_file_to_agent(run_id: str, filename: str, lang: str):
+def send_output_file_to_agent(run_id: str, filename: str, lang: str, processing_mode: str, profile_id: str | None):
     if not AGENT_WEBHOOK_URL:
         raise ValueError(tr(lang, "agent_not_configured"))
 
-    file_path = OUTPUT_DIR / run_id / filename
+    paths = get_profile_paths(processing_mode, profile_id)
+    file_path = paths["output_dir"] / run_id / filename
+
     if not file_path.exists():
         raise FileNotFoundError(tr(lang, "file_not_found").format(filename=filename))
 
@@ -332,6 +392,8 @@ def send_output_file_to_agent(run_id: str, filename: str, lang: str):
                 "filename": filename,
                 "source": "telegram_chat_filter",
                 "content_type": content_type,
+                "processing_mode": processing_mode,
+                "profile_id": profile_id or get_basic_profile_id(),
             },
             files={
                 "file": (file_path.name, f, content_type)
@@ -361,7 +423,23 @@ def index():
     lang = resolve_lang(request.values.get("lang"))
     tr_fn = lambda key: tr(lang, key)
 
-    state_info = get_previous_state_info()
+    processing_mode = str(request.values.get("processing_mode", "basic")).strip().lower()
+    if processing_mode not in {"basic", "advanced"}:
+        processing_mode = "basic"
+
+    profile_id = None
+    advanced_config = None
+
+    if processing_mode == "advanced":
+        try:
+            advanced_config = normalize_advanced_config(build_advanced_config_from_form(request.values))
+            profile_id = build_advanced_profile_id(advanced_config)
+        except Exception:
+            # На GET и при незаполненном UI пока не ломаем страницу
+            advanced_config = None
+            profile_id = None
+
+    state_info = get_state_info_for_profile(processing_mode, profile_id)
     agent_info = get_agent_info()
 
     result_context = {
@@ -376,6 +454,7 @@ def index():
         "form_values": {
             "filter_mode": DEFAULT_FILTER_MODE,
             "keywords": ", ".join(DEFAULT_KEYWORDS),
+            "processing_mode": processing_mode,
         },
         "summary": None,
         "delta_summary": None,
@@ -384,6 +463,8 @@ def index():
         "state_reset_done": request.args.get("reset") == "1",
         "lang": lang,
         "tr": tr_fn,
+        "processing_mode": processing_mode,
+        "profile_id": state_info["profile_id"],
     }
 
     if request.method == "GET":
@@ -394,6 +475,11 @@ def index():
         if file and file.filename
     ]
 
+    processing_mode = str(request.form.get("processing_mode", "basic")).strip().lower()
+    if processing_mode not in {"basic", "advanced"}:
+        result_context["error"] = tr_fn("error_invalid_processing_mode")
+        return render_template("index.html", **result_context)
+
     filter_mode = request.form.get("filter_mode", DEFAULT_FILTER_MODE).strip().lower()
     raw_keywords = request.form.get("keywords", "")
     parsed_keywords = parse_keywords(raw_keywords)
@@ -402,19 +488,36 @@ def index():
     result_context["form_values"] = {
         "filter_mode": filter_mode,
         "keywords": raw_keywords,
+        "processing_mode": processing_mode,
     }
-
-    if filter_mode not in {"include", "exclude"}:
-        result_context["error"] = tr_fn("error_invalid_filter_mode")
-        return render_template("index.html", **result_context)
 
     if not uploaded_files:
         result_context["error"] = tr_fn("error_no_files")
         return render_template("index.html", **result_context)
 
+    if processing_mode == "basic" and filter_mode not in {"include", "exclude"}:
+        result_context["error"] = tr_fn("error_invalid_filter_mode")
+        return render_template("index.html", **result_context)
+
+    advanced_config = None
+    profile_id = None
+
+    if processing_mode == "advanced":
+        try:
+            advanced_config = normalize_advanced_config(build_advanced_config_from_form(request.form))
+            profile_id = build_advanced_profile_id(advanced_config)
+        except Exception as e:
+            result_context["error"] = str(e)
+            return render_template("index.html", **result_context)
+    else:
+        profile_id = get_basic_profile_id()
+
+    paths = get_profile_paths(processing_mode, None if processing_mode == "basic" else profile_id)
+    profile_output_dir = paths["output_dir"]
+
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_upload_dir = UPLOADS_DIR / run_id
-    run_output_dir = OUTPUT_DIR / run_id
+    run_output_dir = profile_output_dir / run_id
 
     run_upload_dir.mkdir(parents=True, exist_ok=True)
     run_output_dir.mkdir(parents=True, exist_ok=True)
@@ -442,15 +545,21 @@ def index():
         try:
             data = load_json_file(upload_path)
 
-            cleaned_data, stats, excluded_chats = filter_and_clean_export(
-                data=data,
-                filter_mode=filter_mode,
-                keywords=keywords,
-                only_personal_chats=DEFAULT_ONLY_PERSONAL_CHATS,
-                check_first_messages_from=DEFAULT_CHECK_FIRST_MESSAGES_FROM,
-                first_messages_limit=DEFAULT_FIRST_MESSAGES_LIMIT,
-                drop_chats_without_messages=DEFAULT_DROP_CHATS_WITHOUT_MESSAGES,
-            )
+            if processing_mode == "basic":
+                cleaned_data, stats, excluded_chats = filter_and_clean_export(
+                    data=data,
+                    filter_mode=filter_mode,
+                    keywords=keywords,
+                    only_personal_chats=DEFAULT_ONLY_PERSONAL_CHATS,
+                    check_first_messages_from=DEFAULT_CHECK_FIRST_MESSAGES_FROM,
+                    first_messages_limit=DEFAULT_FIRST_MESSAGES_LIMIT,
+                    drop_chats_without_messages=DEFAULT_DROP_CHATS_WITHOUT_MESSAGES,
+                )
+            else:
+                cleaned_data, stats, excluded_chats = apply_advanced_filters(
+                    data=data,
+                    config=advanced_config,
+                )
 
             output_filename = f"{index:03d}_{safe_stem}_filtered_clean.json"
             report_filename = f"{index:03d}_{safe_stem}_report.json"
@@ -464,6 +573,8 @@ def index():
                 "saved_upload_file": upload_path.name,
                 "stats": stats,
                 "excluded_chats_preview": excluded_chats[:5000],
+                "processing_mode": processing_mode,
+                "profile_id": profile_id,
             })
 
             filtered_payloads.append(cleaned_data)
@@ -479,8 +590,20 @@ def index():
                 "source_file": original_filename,
                 "output_file": output_filename,
                 "report_file": report_filename,
-                "output_download_url": url_for("download_file", run_id=run_id, filename=output_filename),
-                "report_download_url": url_for("download_file", run_id=run_id, filename=report_filename),
+                "output_download_url": url_for(
+                    "download_file",
+                    processing_mode=processing_mode,
+                    profile_id=profile_id,
+                    run_id=run_id,
+                    filename=output_filename,
+                ),
+                "report_download_url": url_for(
+                    "download_file",
+                    processing_mode=processing_mode,
+                    profile_id=profile_id,
+                    run_id=run_id,
+                    filename=report_filename,
+                ),
                 "stats": stats,
             })
 
@@ -502,9 +625,16 @@ def index():
     delta_full_filename = "delta_full_chats.json"
     report_filename = "processing_report.json"
 
-    total_data = merge_filtered_results(filtered_payloads) if filtered_payloads else {"chats": []}
+    if filtered_payloads:
+        total_data = merge_filtered_results(filtered_payloads)
+    else:
+        total_data = {"chats": []}
 
-    previous_total = load_json_if_exists(PREVIOUS_TOTAL_PATH)
+    previous_total = load_previous_total_for_profile(
+        processing_mode,
+        None if processing_mode == "basic" else profile_id,
+    )
+
     delta_data, delta_full_data, delta_stats = compute_delta(previous_total, total_data)
 
     total_path = run_output_dir / total_filename
@@ -515,19 +645,34 @@ def index():
     save_json_file(total_path, total_data)
     save_json_file(delta_path, delta_data)
     save_json_file(delta_full_path, delta_full_data)
-    save_json_file(PREVIOUS_TOTAL_PATH, total_data)
-    save_previous_state_meta(run_id, len(total_data.get("chats", [])))
+
+    save_previous_total_for_profile(
+        processing_mode,
+        None if processing_mode == "basic" else profile_id,
+        total_data=total_data,
+        meta={
+            "run_id": run_id,
+            "processing_mode": processing_mode,
+            "profile_id": profile_id,
+        },
+    )
 
     processing_report = {
         "run_id": run_id,
-        "settings": {
-            "filter_mode": filter_mode,
-            "keywords": keywords,
-            "only_personal_chats": DEFAULT_ONLY_PERSONAL_CHATS,
-            "check_first_messages_from": DEFAULT_CHECK_FIRST_MESSAGES_FROM,
-            "first_messages_limit": DEFAULT_FIRST_MESSAGES_LIMIT,
-            "drop_chats_without_messages": DEFAULT_DROP_CHATS_WITHOUT_MESSAGES,
-        },
+        "processing_mode": processing_mode,
+        "profile_id": profile_id,
+        "settings": (
+            {
+                "filter_mode": filter_mode,
+                "keywords": keywords,
+                "only_personal_chats": DEFAULT_ONLY_PERSONAL_CHATS,
+                "check_first_messages_from": DEFAULT_CHECK_FIRST_MESSAGES_FROM,
+                "first_messages_limit": DEFAULT_FIRST_MESSAGES_LIMIT,
+                "drop_chats_without_messages": DEFAULT_DROP_CHATS_WITHOUT_MESSAGES,
+            }
+            if processing_mode == "basic"
+            else advanced_config
+        ),
         "summary": {
             "total_input_files": total_input_files,
             "successfully_processed_files": successfully_processed_files,
@@ -544,52 +689,66 @@ def index():
 
     save_json_file(report_path, processing_report)
 
+    state_info = get_state_info_for_profile(processing_mode, None if processing_mode == "basic" else profile_id)
+
     result_context["success"] = True
     result_context["run_id"] = run_id
     result_context["downloads"] = processed_outputs
     result_context["total_download"] = {
         "filename": total_filename,
-        "url": url_for("download_file", run_id=run_id, filename=total_filename),
+        "url": url_for("download_file", processing_mode=processing_mode, profile_id=profile_id, run_id=run_id, filename=total_filename),
     }
     result_context["delta_download"] = {
         "filename": delta_filename,
-        "url": url_for("download_file", run_id=run_id, filename=delta_filename),
+        "url": url_for("download_file", processing_mode=processing_mode, profile_id=profile_id, run_id=run_id, filename=delta_filename),
     }
     result_context["delta_full_download"] = {
         "filename": delta_full_filename,
-        "url": url_for("download_file", run_id=run_id, filename=delta_full_filename),
+        "url": url_for("download_file", processing_mode=processing_mode, profile_id=profile_id, run_id=run_id, filename=delta_full_filename),
     }
     result_context["report_download"] = {
         "filename": report_filename,
-        "url": url_for("download_file", run_id=run_id, filename=report_filename),
+        "url": url_for("download_file", processing_mode=processing_mode, profile_id=profile_id, run_id=run_id, filename=report_filename),
     }
     result_context["summary"] = processing_report["summary"]
     result_context["delta_summary"] = processing_report["delta_summary"]
-    result_context["state_info"] = get_previous_state_info()
+    result_context["state_info"] = state_info
     result_context["agent_info"] = get_agent_info()
+    result_context["processing_mode"] = processing_mode
+    result_context["profile_id"] = state_info["profile_id"]
 
     return render_template("index.html", **result_context)
 
 
 @app.route("/reset-state", methods=["POST"])
-def reset_state():
+def reset_state_route():
     lang = resolve_lang(request.form.get("lang") or request.args.get("lang"))
+    processing_mode = str(request.form.get("processing_mode", "basic")).strip().lower()
 
-    if PREVIOUS_TOTAL_PATH.exists():
-        PREVIOUS_TOTAL_PATH.unlink()
+    if processing_mode not in {"basic", "advanced"}:
+        processing_mode = "basic"
 
-    if PREVIOUS_TOTAL_META_PATH.exists():
-        PREVIOUS_TOTAL_META_PATH.unlink()
+    profile_id = None
+    if processing_mode == "advanced":
+        try:
+            advanced_config = normalize_advanced_config(build_advanced_config_from_form(request.form))
+            profile_id = build_advanced_profile_id(advanced_config)
+        except Exception:
+            profile_id = None
 
-    return redirect(url_for("index", reset="1", lang=lang))
+    reset_profile_state(processing_mode, None if processing_mode == "basic" else profile_id)
+
+    return redirect(url_for("index", reset="1", lang=lang, processing_mode=processing_mode))
 
 
-@app.route("/send-to-agent/<run_id>/<path:filename>", methods=["POST"])
-def send_to_agent(run_id: str, filename: str):
+@app.route("/send-to-agent/<processing_mode>/<path:profile_id>/<run_id>/<path:filename>", methods=["POST"])
+def send_to_agent(processing_mode: str, profile_id: str, run_id: str, filename: str):
     lang = resolve_lang(request.args.get("lang"))
 
+    actual_profile_id = None if processing_mode == "basic" else profile_id
+
     try:
-        result = send_output_file_to_agent(run_id, filename, lang)
+        result = send_output_file_to_agent(run_id, filename, lang, processing_mode, actual_profile_id)
         return jsonify({
             "ok": True,
             "details": result,
@@ -601,9 +760,11 @@ def send_to_agent(run_id: str, filename: str):
         }), 400
 
 
-@app.route("/download/<run_id>/<path:filename>")
-def download_file(run_id: str, filename: str):
-    directory = OUTPUT_DIR / run_id
+@app.route("/download/<processing_mode>/<path:profile_id>/<run_id>/<path:filename>")
+def download_file(processing_mode: str, profile_id: str, run_id: str, filename: str):
+    actual_profile_id = None if processing_mode == "basic" else profile_id
+    paths = get_profile_paths(processing_mode, actual_profile_id)
+    directory = paths["output_dir"] / run_id
     return send_from_directory(directory, filename, as_attachment=True)
 
 

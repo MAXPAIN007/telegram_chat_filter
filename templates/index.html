@@ -13,6 +13,7 @@
   data-no-files-selected="{{ tr('no_files_selected') }}"
   data-send-success-template="{{ tr('send_success_template') }}"
   data-send-error-fallback="{{ tr('send_error_fallback') }}"
+  data-current-lang="{{ lang }}"
 >
   <div id="toast-container" class="toast-container"></div>
 
@@ -53,8 +54,16 @@
     {% endif %}
 
     <section class="card">
-      <form method="post" enctype="multipart/form-data" class="form-grid">
+      <form method="post" enctype="multipart/form-data" class="form-grid" id="main-processing-form">
         <input type="hidden" name="lang" value="{{ lang }}">
+
+        <div class="form-group full">
+          <label for="processing_mode">{{ tr("processing_mode") }}</label>
+          <select id="processing_mode" name="processing_mode">
+            <option value="basic" {% if processing_mode == "basic" %}selected{% endif %}>{{ tr("basic_mode") }}</option>
+            <option value="advanced" {% if processing_mode == "advanced" %}selected{% endif %}>{{ tr("advanced_mode") }}</option>
+          </select>
+        </div>
 
         <div class="form-group full">
           <label for="files">{{ tr("raw_telegram_export") }}</label>
@@ -68,27 +77,72 @@
           <small>{{ tr("raw_export_help") }}</small>
         </div>
 
-        <div class="form-group">
-          <label for="filter_mode">{{ tr("filter_mode") }}</label>
-          <select id="filter_mode" name="filter_mode">
-            <option value="include" {% if form_values.filter_mode == "include" %}selected{% endif %}>
-              {{ tr("mode_include") }}
-            </option>
-            <option value="exclude" {% if form_values.filter_mode == "exclude" %}selected{% endif %}>
-              {{ tr("mode_exclude") }}
-            </option>
-          </select>
+        <!-- BASIC -->
+        <div id="basic-mode-block" class="mode-block full {% if processing_mode != 'basic' %}hidden{% endif %}">
+          <div class="form-grid nested-grid">
+            <div class="form-group">
+              <label for="filter_mode">{{ tr("filter_mode") }}</label>
+              <select id="filter_mode" name="filter_mode">
+                <option value="include" {% if form_values.filter_mode == "include" %}selected{% endif %}>
+                  {{ tr("mode_include") }}
+                </option>
+                <option value="exclude" {% if form_values.filter_mode == "exclude" %}selected{% endif %}>
+                  {{ tr("mode_exclude") }}
+                </option>
+              </select>
+            </div>
+
+            <div class="form-group full">
+              <label for="keywords">{{ tr("keywords") }}</label>
+              <textarea
+                id="keywords"
+                name="keywords"
+                rows="4"
+                placeholder="client, клиент"
+              >{{ form_values.keywords }}</textarea>
+              <small>{{ tr("keywords_help") }}</small>
+            </div>
+          </div>
         </div>
 
-        <div class="form-group full">
-          <label for="keywords">{{ tr("keywords") }}</label>
-          <textarea
-            id="keywords"
-            name="keywords"
-            rows="4"
-            placeholder="client, клиент"
-          >{{ form_values.keywords }}</textarea>
-          <small>{{ tr("keywords_help") }}</small>
+        <!-- ADVANCED -->
+        <div id="advanced-mode-block" class="mode-block full {% if processing_mode != 'advanced' %}hidden{% endif %}">
+          <div class="advanced-panel">
+            <div class="advanced-grid">
+              <div class="form-group">
+                <label for="adv_match_mode">Match mode</label>
+                <select id="adv_match_mode" name="adv_match_mode">
+                  <option value="all">ALL filters must match</option>
+                  <option value="any">ANY filter may match</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="adv_output_mode">Output mode</label>
+                <select id="adv_output_mode" name="adv_output_mode">
+                  <option value="full_chats">Full matching chats</option>
+                  <option value="matched_messages_only">Matched messages only</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="adv_date_from">Date from</label>
+                <input id="adv_date_from" name="adv_date_from" type="date">
+              </div>
+
+              <div class="form-group">
+                <label for="adv_date_to">Date to</label>
+                <input id="adv_date_to" name="adv_date_to" type="date">
+              </div>
+            </div>
+
+            <div class="advanced-filters-header">
+              <h3>Filter builder</h3>
+              <button type="button" id="add-filter-row" class="btn-secondary">+ Add filter</button>
+            </div>
+
+            <div id="advanced-filters-container" class="advanced-filters-container"></div>
+          </div>
         </div>
 
         <div class="form-group full">
@@ -101,8 +155,14 @@
       <div class="section-header">
         <h2>{{ tr("current_delta_state") }}</h2>
 
-        <form method="post" action="{{ url_for('reset_state') }}" class="reset-form">
+        <form method="post" action="{{ url_for('reset_state_route') }}" class="reset-form">
           <input type="hidden" name="lang" value="{{ lang }}">
+          <input type="hidden" name="processing_mode" value="{{ processing_mode }}">
+          <input type="hidden" name="adv_match_mode" id="reset_adv_match_mode">
+          <input type="hidden" name="adv_output_mode" id="reset_adv_output_mode">
+          <input type="hidden" name="adv_date_from" id="reset_adv_date_from">
+          <input type="hidden" name="adv_date_to" id="reset_adv_date_to">
+          <div id="reset-advanced-hidden-filters"></div>
           <button type="button" id="open-reset-modal" class="btn-secondary">
             {{ tr("reset_delta_history") }}
           </button>
@@ -115,9 +175,13 @@
           <div><strong>{{ tr("run_id") }}:</strong> {{ state_info.run_id or "—" }}</div>
           <div><strong>{{ tr("saved_at") }}:</strong> {{ state_info.saved_at or "—" }}</div>
           <div><strong>{{ tr("chats") }}:</strong> {{ state_info.total_chats }}</div>
+          <div><strong>{{ tr("processing_mode") }}:</strong> {{ processing_mode }}</div>
+          <div><strong>{{ tr("profile_id") }}:</strong> {{ profile_id }}</div>
         {% else %}
           <div><strong>{{ tr("previous_total_found") }}:</strong> {{ tr("not_found") }}</div>
           <div>{{ tr("next_run_first_delta") }}</div>
+          <div><strong>{{ tr("processing_mode") }}:</strong> {{ processing_mode }}</div>
+          <div><strong>{{ tr("profile_id") }}:</strong> {{ profile_id }}</div>
         {% endif %}
       </div>
 
@@ -185,6 +249,8 @@
                 <button
                   type="button"
                   class="btn-agent send-agent-btn"
+                  data-processing-mode="{{ processing_mode }}"
+                  data-profile-id="{{ profile_id }}"
                   data-run-id="{{ run_id }}"
                   data-filename="{{ total_download.filename }}"
                   data-lang="{{ lang }}"
@@ -204,6 +270,8 @@
                 <button
                   type="button"
                   class="btn-agent send-agent-btn"
+                  data-processing-mode="{{ processing_mode }}"
+                  data-profile-id="{{ profile_id }}"
                   data-run-id="{{ run_id }}"
                   data-filename="{{ delta_download.filename }}"
                   data-lang="{{ lang }}"
@@ -223,6 +291,8 @@
                 <button
                   type="button"
                   class="btn-agent send-agent-btn"
+                  data-processing-mode="{{ processing_mode }}"
+                  data-profile-id="{{ profile_id }}"
                   data-run-id="{{ run_id }}"
                   data-filename="{{ delta_full_download.filename }}"
                   data-lang="{{ lang }}"
@@ -267,6 +337,28 @@
       </section>
     {% endif %}
   </main>
+
+  <template id="advanced-filter-row-template">
+    <div class="advanced-filter-row">
+      <select name="adv_scope[]" class="adv-scope">
+        <option value="chat">Chat</option>
+        <option value="message">Message</option>
+      </select>
+
+      <select name="adv_field[]" class="adv-field"></select>
+
+      <select name="adv_operator[]" class="adv-operator"></select>
+
+      <input type="text" name="adv_value[]" class="adv-value" placeholder="Value">
+
+      <select name="adv_mode[]" class="adv-mode">
+        <option value="include">Include</option>
+        <option value="exclude">Exclude</option>
+      </select>
+
+      <button type="button" class="btn-danger-outline adv-remove-row">×</button>
+    </div>
+  </template>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
