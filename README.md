@@ -1,49 +1,149 @@
 # Telegram Chat Filter
 
-Telegram Chat Filter is a local tool for processing Telegram export JSON files.
+Telegram Chat Filter is a local web tool for processing Telegram export JSON files.
 
-The project is designed to:
+It is designed to help users:
 - upload raw Telegram JSON exports;
-- filter chats by keywords;
-- clean messages from unnecessary technical fields;
-- build convenient output JSON files for further analysis;
-- optionally send already processed files to an external agent through a webhook.
+- filter chats using either a simple or advanced filtering flow;
+- remove unnecessary technical fields from messages;
+- build clean, structured JSON files for manual analysis or AI processing;
+- generate full snapshots and delta-based outputs;
+- optionally send prepared files to an external agent or automation workflow through a webhook.
 
-The tool runs locally on the user's computer through a browser interface and a local Flask server.  
-No data is sent anywhere automatically. External sending is only possible manually through the **Send to agent** button, if a webhook has been configured.
+The application runs locally on the user's machine through a browser UI and a local Flask server.
+
+No Telegram data is sent anywhere automatically.  
+External sending only happens manually through the **Send to agent** button, if a webhook is configured.
 
 ---
 
 ## What this project is for
 
-Telegram exports contain a lot of extra fields and technical information that make analysis inconvenient.
+Telegram exports usually contain a lot of raw technical data that is inconvenient for analysis.
 
-This project solves several tasks at once:
+This project turns those exports into cleaner, more useful outputs by providing:
 
-1. Filters only the chats you need by given keywords.
-2. Keeps only the useful fields in each message.
-3. Builds convenient JSON files for manual review or AI analysis.
-4. Creates a delta between the previous and current run.
-5. Allows sending already prepared files to an external workflow, for example:
-   - n8n
-   - Windmill
-   - a custom webhook
-   - any other agent or automation pipeline
+1. **Basic filtering** for quick keyword-based processing.
+2. **Advanced filtering** with a visual filter builder.
+3. **Message cleanup** that keeps only the useful fields.
+4. **Full combined outputs** for the current run.
+5. **Delta outputs** for changes between runs.
+6. **Optional webhook delivery** to external agents such as n8n, Windmill, or custom workflows.
 
 ---
 
-## What the project does
+## Main features
 
-After uploading Telegram JSON files, the application:
+- local Flask-based web interface
+- upload one or multiple Telegram export JSON files
+- **Basic mode**
+- **Advanced mode**
+- visual **Filter Builder**
+- include / exclude filter rules
+- date range filtering
+- output mode selection:
+  - full matching chats
+  - matched messages only
+- full combined output file
+- delta update files
+- isolated delta history for each advanced filter profile
+- optional webhook sending to an external agent
+- Russian / English UI
 
-1. reads the input Telegram export JSON files;
-2. filters chats by keywords;
-3. cleans the message payloads;
-4. creates separate processed files for each uploaded JSON;
-5. creates one combined full file;
-6. compares the current combined file with the previous combined file;
-7. creates update files;
-8. stores the result for further work.
+---
+
+## Processing modes
+
+## Basic mode
+
+Basic mode is the simple workflow.
+
+It allows you to:
+- choose a global filter mode:
+  - `Include`
+  - `Exclude`
+- enter keywords
+- process uploaded Telegram JSON files quickly
+
+This mode is useful for fast, repeatable filtering.
+
+---
+
+## Advanced mode
+
+Advanced mode is intended for more flexible and reusable filtering.
+
+It includes:
+- `Match mode`
+  - `ALL filters must match`
+  - `ANY filter may match`
+- `Output mode`
+  - `Full matching chats`
+  - `Matched messages only`
+- `Date from`
+- `Date to`
+- a visual **Filter Builder**
+
+Each filter row can include:
+- **Scope**
+  - `Chat`
+  - `Message`
+- **Field**
+- **Operator**
+- **Value**
+- **Mode**
+  - `Include`
+  - `Exclude`
+
+---
+
+## Fields available in Advanced mode
+
+### Chat fields
+- `id`
+- `name`
+- `type`
+
+### Message fields
+- `id`
+- `reply_to_message_id`
+- `date`
+- `from`
+- `text`
+
+---
+
+## Operators available in Advanced mode
+
+### Text fields
+- `contains`
+- `not contains`
+- `equals`
+- `not equals`
+- `starts with`
+- `ends with`
+
+### Numeric fields
+- `equals`
+- `not equals`
+- `greater than`
+- `less than`
+
+### Date fields
+- `equals`
+- `not equals`
+- `on or after`
+- `on or before`
+
+---
+
+## Output modes in Advanced mode
+
+### `Full matching chats`
+If a chat matches the filter rules, the full cleaned chat is included in the output.
+
+### `Matched messages only`
+If a chat matches, only the messages that actually match the message-level rules are included.
 
 ---
 
@@ -90,19 +190,60 @@ Contains full versions only of chats that:
 - appeared for the first time;
 - or were updated since the previous run
 
-This file is useful when you want to see the whole updated chat, not only the newly added messages.
+This file is useful when you want to review the entire updated chat, not only the newly added messages.
 
 ---
 
 ### `processing_report.json`
-Contains a report for the current run:
+Contains a processing report for the current run:
 - how many files were uploaded;
 - how many were processed successfully;
 - how many failed;
 - how many chats were found;
 - how many remained after filtering;
 - how many were excluded;
-- how many were included in the final output files.
+- how many were included in the final outputs.
+
+---
+
+## Delta logic
+
+The application stores the previous full output snapshot in the `state` folder.
+
+### Basic mode state
+Basic mode keeps its own state separately.
+
+### Advanced mode state
+Advanced mode also keeps state separately, but **per automatically generated filter profile**.
+
+That means:
+- Basic mode does not overwrite Advanced mode history
+- one Advanced filter configuration does not overwrite another Advanced configuration
+- delta calculations stay isolated and correct
+
+---
+
+## Automatic Advanced profile isolation
+
+Each Advanced configuration is normalized and converted into an automatic profile ID using a hash.
+
+Because of that:
+- the user does not need to enter a manual profile name;
+- different advanced filter setups automatically get separate state history;
+- delta comparison is always linked to the correct Advanced filter profile.
+
+---
+
+## What the Reset delta history button does
+
+The **Reset delta history** button removes the current comparison history for the current mode/profile.
+
+After that:
+- the next run is treated as the first one;
+- comparison with the previous total will no longer be available;
+- delta files will be rebuilt from scratch.
+
+In Advanced mode, reset applies to the current advanced profile only.
 
 ---
 
@@ -117,24 +258,26 @@ This is useful when, after filtering, you want to:
 - automate further analysis.
 
 ### How it works
+
 Next to the main output files in the interface, there are **Send to agent** buttons.
 
 When clicked:
-1. the selected file is taken from the local output folder;
+1. the selected file is taken from local output;
 2. its size is checked;
-3. if the file size is within the limit, it is sent to the configured webhook;
+3. if the file size is within the configured limit, it is sent to the webhook;
 4. if the file is too large, sending is blocked and a warning is shown.
 
 ### How the file is sent
+
 The file is sent as `multipart/form-data`.
 
-This means the webhook receives the actual file, not just a raw JSON string inserted into the request body.
+This means the receiving webhook gets the actual file, not just a JSON string placed directly into the request body.
 
-This format is convenient and reliable for:
+This works well for:
 - n8n
 - Windmill
 - standard webhook endpoints
-- server-side processing pipelines
+- custom server-side automation flows
 
 ---
 
@@ -144,316 +287,3 @@ By default, the following limit is used:
 
 ```env
 AGENT_MAX_FILE_SIZE_MB=16
-````
-
-If an output file is larger than this value, it will not be sent.
-
-This is done for safety and compatibility with webhook systems that have incoming payload size limits.
-
----
-
-## `.env` configuration
-
-Create a `.env` file in the project root.
-
-Example:
-
-```env
-AGENT_WEBHOOK_URL=
-AGENT_AUTH_HEADER_NAME=
-AGENT_AUTH_HEADER_VALUE=
-AGENT_TIMEOUT_SECONDS=60
-AGENT_MAX_FILE_SIZE_MB=16
-```
-
-### What these variables mean
-
-#### `AGENT_WEBHOOK_URL`
-
-The webhook URL where files will be sent.
-
-Example:
-
-```env
-AGENT_WEBHOOK_URL=https://your-domain.com/webhook/telegram-agent
-```
-
----
-
-#### `AGENT_AUTH_HEADER_NAME`
-
-Header name for authorization if the webhook requires a secret header.
-
-Example:
-
-```env
-AGENT_AUTH_HEADER_NAME=X-Webhook-Secret
-```
-
----
-
-#### `AGENT_AUTH_HEADER_VALUE`
-
-The value for that authorization header.
-
-Example:
-
-```env
-AGENT_AUTH_HEADER_VALUE=my_secret_token
-```
-
----
-
-#### `AGENT_TIMEOUT_SECONDS`
-
-HTTP request timeout when sending a file to the agent.
-
----
-
-#### `AGENT_MAX_FILE_SIZE_MB`
-
-Maximum allowed file size for sending.
-
----
-
-## Example `.env`
-
-```env
-AGENT_WEBHOOK_URL=https://your-domain.com/webhook/telegram-agent
-AGENT_AUTH_HEADER_NAME=X-Webhook-Secret
-AGENT_AUTH_HEADER_VALUE=my_secret_token
-AGENT_TIMEOUT_SECONDS=60
-AGENT_MAX_FILE_SIZE_MB=16
-```
-
----
-
-## Installation and startup order
-
-## 1. Clone or download the project
-
-First, download the project to your computer or extract the archive into a separate folder.
-
----
-
-## 2. Open the project folder
-
-Open a terminal in the project folder.
-
-Example for Git Bash:
-
-```bash
-cd /d/Projects/telegram_chat_filter
-```
-
----
-
-## 3. Create a virtual environment
-
-```bash
-python -m venv .venv
-```
-
----
-
-## 4. Activate the virtual environment
-
-### For Git Bash
-
-```bash
-source .venv/Scripts/activate
-```
-
-### For PowerShell
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
----
-
-## 5. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## 6. Create `.env`
-
-Create a `.env` file in the project root.
-
-If you do not need webhook support yet, you can leave the values empty:
-
-```env
-AGENT_WEBHOOK_URL=
-AGENT_AUTH_HEADER_NAME=
-AGENT_AUTH_HEADER_VALUE=
-AGENT_TIMEOUT_SECONDS=60
-AGENT_MAX_FILE_SIZE_MB=16
-```
-
-If webhook support is needed, insert the real values.
-
----
-
-## 7. Run the project
-
-```bash
-python app.py
-```
-
-Then open in the browser:
-
-```text
-http://127.0.0.1:5000
-```
-
----
-
-## How to use the interface
-
-After opening the page:
-
-1. Click **Choose files**
-2. Select one or more Telegram export JSON files
-3. Choose a filter mode:
-
-   * `Include` — keep chats where a keyword is found
-   * `Exclude` — remove chats where a keyword is found
-4. Enter your keywords
-5. Click **Run processing**
-6. Download the output files you need
-7. If needed, send one of the files through **Send to agent**
-
----
-
-## How delta works
-
-The project stores the previous full output file in the `state` folder.
-
-It uses:
-
-```text
-state/previous_total_filtered.json
-state/previous_total_meta.json
-```
-
-### On every new run
-
-1. a new `total_filtered.json` is built;
-2. the new total is compared with the previous total;
-3. the following files are created:
-
-   * `delta_updates.json`
-   * `delta_full_chats.json`
-4. the new total is stored as the current state for the next run
-
----
-
-## What the Reset delta history button does
-
-The **Reset delta history** button removes the current comparison history.
-
-After that:
-
-* the next run will be treated as the first one;
-* comparison with the previous total will no longer be available;
-* delta files will be rebuilt from scratch.
-
-This is useful if you want to restart delta tracking from a clean state.
-
----
-
-## Localization
-
-The interface currently supports:
-
-* Russian
-* English
-
-Language switching is available at the top of the page.
-
----
-
-## Security
-
-The project runs locally.
-
-This means:
-
-* Telegram JSON files are processed on the user's computer;
-* data is not sent anywhere automatically;
-* external sending happens only manually through **Send to agent**;
-* secrets and webhook settings should be stored only in `.env`.
-
-The `.env` file must not be committed to GitHub.
-
----
-
-## What should not be uploaded to GitHub
-
-Do not commit:
-
-* `.env`
-* `.venv`
-* `output`
-* `uploads`
-* temporary and service files
-
----
-
-## Project structure
-
-```text
-telegram_chat_filter/
-├─ .venv/
-├─ input/
-├─ output/
-├─ uploads/
-├─ state/
-├─ static/
-│  ├─ app.js
-│  └─ style.css
-├─ templates/
-│  └─ index.html
-├─ app.py
-├─ defaults.py
-├─ delta_core.py
-├─ parser_core.py
-├─ requirements.txt
-├─ README.md
-├─ .env.example
-└─ .gitignore
-```
-
----
-
-## Dependencies
-
-Main project dependencies:
-
-* Flask
-* Werkzeug
-* requests
-
-They are installed automatically with:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## Possible future improvements
-
-This project can be extended further, for example:
-
-* add more interface languages;
-* add output file archiving;
-* add support for multiple webhook endpoints;
-* add a preview mode before downloading;
-* add more flexible filtering by `name` and `from`;
-* add TXT / Markdown export;
-* add batch sending to the agent.
